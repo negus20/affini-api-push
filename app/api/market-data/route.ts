@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 // in-memory cache for last payload (per edge region, non-persistent)
 let LAST_PAYLOAD: any = null;
