@@ -2,22 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-// In-memory list of all posted payloads (for debugging / viewing)
-// NOTE: This resets on redeploy / cold start and is not persistent.
-type MarketPayload = {
-    vehicle_name?: string;
-    vehicle_year?: number;
-    stats?: any;
-    [key: string]: any;
-};
-
-const VEHICLE_DATA: MarketPayload[] = [];
+// Last snapshot payload
+let LAST_PAYLOAD: any = null;
 let LAST_RECEIVED_AT: string | null = null;
 
 const REQUIRED_TOKEN = process.env.MARKET_API_TOKEN || "";
 
 export async function POST(req: NextRequest) {
-    // Optional bearer auth
     if (REQUIRED_TOKEN) {
         const authHeader = req.headers.get("authorization") || "";
         const token = authHeader.replace("Bearer ", "").trim();
@@ -26,7 +17,7 @@ export async function POST(req: NextRequest) {
         }
     }
 
-    let data: MarketPayload;
+    let data: any;
     try {
         data = await req.json();
     } catch {
@@ -34,34 +25,35 @@ export async function POST(req: NextRequest) {
     }
 
     LAST_RECEIVED_AT = new Date().toISOString();
-
-    const enriched: MarketPayload = {
+    LAST_PAYLOAD = {
         ...data,
-        _updated_at: LAST_RECEIVED_AT,
+        _received_at: LAST_RECEIVED_AT,
     };
 
-    VEHICLE_DATA.push(enriched);
+    console.log("Affini API received snapshot:");
+    console.log(JSON.stringify(LAST_PAYLOAD, null, 2));
 
-    console.log("Affini API received payload:");
-    console.log(JSON.stringify(enriched, null, 2));
+    const vehicleCount = Array.isArray(data?.vehicles)
+        ? data.vehicles.length
+        : undefined;
 
     return NextResponse.json(
         {
             status: "ok",
             received_at: LAST_RECEIVED_AT,
-            count_now: VEHICLE_DATA.length,
+            vehicle_count: vehicleCount,
         },
         { status: 200 }
     );
 }
 
 export async function GET() {
-    if (VEHICLE_DATA.length === 0) {
+    if (!LAST_PAYLOAD) {
         return NextResponse.json(
             {
                 status: "no_data_yet",
                 message:
-                    "No market data has been cached in this runtime instance since the last deploy.",
+                    "No market snapshot has been posted to this runtime instance since the last deploy.",
             },
             { status: 200 }
         );
@@ -71,8 +63,7 @@ export async function GET() {
         {
             status: "ok",
             last_received_at: LAST_RECEIVED_AT,
-            vehicle_count: VEHICLE_DATA.length,
-            vehicles: VEHICLE_DATA,
+            snapshot: LAST_PAYLOAD,
         },
         { status: 200 }
     );
