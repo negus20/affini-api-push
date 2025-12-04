@@ -1,70 +1,63 @@
-import { NextRequest, NextResponse } from "next/server";
+// app/api/market-data/route.ts
+import { NextResponse } from 'next/server';
+import { kv } from '@vercel/kv';
 
-export const runtime = "nodejs";
+export const runtime = 'edge'; // or 'nodejs', either is fine
 
-// Last snapshot payload
-let LAST_PAYLOAD: any = null;
-let LAST_RECEIVED_AT: string | null = null;
-
-const REQUIRED_TOKEN = process.env.MARKET_API_TOKEN || "";
-
-export async function POST(req: NextRequest) {
-    if (REQUIRED_TOKEN) {
-        const authHeader = req.headers.get("authorization") || "";
-        const token = authHeader.replace("Bearer ", "").trim();
-        if (!token || token !== REQUIRED_TOKEN) {
-            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-        }
-    }
-
-    let data: any;
-    try {
-        data = await req.json();
-    } catch {
-        return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-    }
-
-    LAST_RECEIVED_AT = new Date().toISOString();
-    LAST_PAYLOAD = {
-        ...data,
-        _received_at: LAST_RECEIVED_AT,
-    };
-
-    console.log("Affini API received snapshot:");
-    console.log(JSON.stringify(LAST_PAYLOAD, null, 2));
-
-    const vehicleCount = Array.isArray(data?.vehicles)
-        ? data.vehicles.length
-        : undefined;
-
-    return NextResponse.json(
-        {
-            status: "ok",
-            received_at: LAST_RECEIVED_AT,
-            vehicle_count: vehicleCount,
-        },
-        { status: 200 }
-    );
-}
+const SNAPSHOT_KEY = 'affini:market_latest';
 
 export async function GET() {
-    if (!LAST_PAYLOAD) {
-        return NextResponse.json(
-            {
-                status: "no_data_yet",
-                message:
-                    "No market snapshot has been posted to this runtime instance since the last deploy.",
-            },
-            { status: 200 }
-        );
+  try {
+    const snapshot = await kv.get(SNAPSHOT_KEY);
+
+    if (!snapshot) {
+      return NextResponse.json(
+        {
+          status: 'no_data_yet',
+          message:
+            'No market snapshot has been posted to this runtime instance since the last deploy.',
+        },
+        { status: 404 },
+      );
     }
 
+    // kv.get auto-deserializes JSON objects
+    return NextResponse.json(snapshot);
+  } catch (err) {
+    console.error('Error reading from KV', err);
     return NextResponse.json(
-        {
-            status: "ok",
-            last_received_at: LAST_RECEIVED_AT,
-            snapshot: LAST_PAYLOAD,
-        },
-        { status: 200 }
+      { status: 'error', message: 'Failed to read market snapshot from storage.' },
+      { status: 500 },
     );
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+
+    // Very light validation: must at least have vehicles array
+    if (!body || typeof body !== 'object' || !Array.isArray((body as any).vehicles)) {
+      return NextResponse.json(
+        { status: 'bad_request', message: 'Invalid snapshot payload.' },
+        { status: 400 },
+      );
+    }
+
+    const snapshot = {
+      ...body,
+      stored_at: new Date().toISOString(),
+    };
+
+    // Store / overwrite the latest snapshot in KV
+    await kv.set(SNAPSHOT_KEY, snapshot);
+
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    console.error('Error writing to KV', err);
+    return NextResponse.json(
+      { status: 'error', message: 'Failed to store market snapshot.' },
+      { status: 500 },
+    );
+  }
 }
